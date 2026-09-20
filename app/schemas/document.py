@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 class Source(BaseModel):
     page: int
     label: str
+    text: Optional[str] = None
 
 
 class DocumentOut(BaseModel):

@@ -4,6 +4,8 @@ FastAPI backend for the existing DocuMind React UI.
 
 ## Run Locally
 
+Start the backend:
+
 ```bash
 cd /Users/sasitamda/Desktop/documind-ai-api
 python3 -m venv .venv
@@ -11,7 +13,27 @@ python3 -m venv .venv
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+Verify it is running:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/api/dashboard/stats
+```
+
 The default database is SQLite at `data/documind.db` so the app can run immediately.
+
+The React frontend should use:
+
+```text
+VITE_API_URL=http://127.0.0.1:8000
+```
+
+Allowed local frontend origins:
+
+- `http://localhost:5173`
+- `http://127.0.0.1:5173`
+- `http://localhost:5174`
+- `http://127.0.0.1:5174`
 
 ## Use PostgreSQL
 
@@ -25,12 +47,25 @@ docker compose up -d postgres
 The `.env.example` file points to:
 
 ```text
-postgresql+psycopg2://postgres:postgres@localhost:5432/documind
+postgresql://postgres:root123@localhost:5438/docmind-ai-db
 ```
 
-## LLM Behavior
+## Gemini LLM
 
-Set `OPENAI_API_KEY` in `.env` for LangChain/OpenAI answers. Without a key, the backend still performs PDF extraction, chunking, embeddings, FAISS retrieval, and returns an extractive answer with source pages.
+Set `GEMINI_API_KEY` in `.env` for LangChain/Gemini answers, summaries, and extraction:
+
+```text
+GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-1.5-flash
+```
+
+The key is read only by the FastAPI backend and is never returned to the React frontend. Without a Gemini key, the backend still performs PDF extraction, chunking, embeddings, FAISS retrieval, and returns extractive fallback answers with source pages.
+
+## Tests
+
+```bash
+.venv/bin/pytest
+```
 
 ## Endpoints
 

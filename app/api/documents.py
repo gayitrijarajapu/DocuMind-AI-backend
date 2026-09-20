@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.document import Document
 from app.schemas.document import DocumentOut, ExtractResponse, SummaryResponse
+from app.services.document_ai import extract_document_fields, summarize_document as summarize_with_ai
 from app.services.document_processor import processor
 from app.services.formatters import document_to_ui
 
@@ -91,7 +92,7 @@ def summarize_document(document_id: str, db: Session = Depends(get_db)):
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found.")
-    return {"summary": document.summary, "keyPoints": document.key_points or []}
+    return summarize_with_ai(db, document)
 
 
 @router.post("/{document_id}/extract", response_model=ExtractResponse)
@@ -99,4 +100,4 @@ def extract_document(document_id: str, db: Session = Depends(get_db)):
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found.")
-    return {"fields": document.fields or {}}
+    return extract_document_fields(db, document)
