@@ -42,17 +42,31 @@ def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db))
     db.commit()
     db.refresh(document)
 
+    page_count = 0
     try:
         pages, page_count = processor.extract_pdf_text(file_path)
         chunks = processor.chunk_pages(pages)
         document.pages = page_count
         processor.index_document(db, document, chunks)
+        summarize_with_ai(db, document)
         db.refresh(document)
     except Exception as exc:
+        db.rollback()
+        document = db.get(Document, document_id)
+        if document is None:
+            raise HTTPException(status_code=500, detail="Document upload failed before metadata was saved.")
+        error_message = str(exc)
+        document.pages = page_count
         document.status = "Needs review"
-        document.summary = f"PDF upload succeeded, but processing failed: {exc}"
+        document.summary = f"PDF upload succeeded, but processing failed: {error_message}"
         document.key_points = ["Upload received", "Processing failed", "Review the PDF text layer"]
-        document.fields = {"Type": "PDF", "Confidence": "Needs review"}
+        document.fields = {
+            "File": document.file_name,
+            "Type": "PDF",
+            "Pages": str(page_count),
+            "Confidence": "Needs review",
+            "Error": error_message,
+        }
         db.commit()
         db.refresh(document)
 

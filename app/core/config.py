@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     llm_provider: str = "gemini"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-1.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_device: str = "cpu"
     upload_dir: Path = Path("data/uploads")
     faiss_dir: Path = Path("data/faiss")
     frontend_origin: str = "http://localhost:5173"

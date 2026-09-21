@@ -5,10 +5,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import faiss
 import numpy as np
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -22,16 +20,27 @@ class TextChunk:
     text: str
 
 
+class DocumentProcessingError(RuntimeError):
+    pass
+
+
 class DocumentProcessor:
     def __init__(self):
         self.settings = get_settings()
-        self._embedding_model: SentenceTransformer | None = None
+        self._embedding_model = None
 
     @property
-    def embedding_model(self) -> SentenceTransformer:
+    def embedding_model(self):
         if self._embedding_model is None:
-            model_name = self.settings.embedding_model.replace("sentence-transformers/", "")
-            self._embedding_model = SentenceTransformer(model_name)
+            from sentence_transformers import SentenceTransformer
+
+            model_name = self.settings.embedding_model
+            if model_name.startswith("sentence-transformers/"):
+                model_name = model_name.replace("sentence-transformers/", "", 1)
+            self._embedding_model = SentenceTransformer(
+                model_name,
+                device=self.settings.embedding_device,
+            )
         return self._embedding_model
 
     def extract_pdf_text(self, file_path: Path) -> tuple[list[tuple[int, str]], int]:
@@ -58,6 +67,15 @@ class DocumentProcessor:
         return chunks
 
     def index_document(self, db: Session, document: Document, chunks: list[TextChunk]) -> None:
+        if not chunks:
+            raise DocumentProcessingError(
+                "No selectable text could be extracted from this PDF. Scanned PDFs need OCR before indexing."
+            )
+
+        embeddings = self._encode_chunks(chunks)
+        if embeddings.ndim != 2 or embeddings.shape[0] != len(chunks):
+            raise DocumentProcessingError("Embedding generation returned an invalid vector shape.")
+
         db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
         db.add_all(
             DocumentChunk(
@@ -69,22 +87,33 @@ class DocumentProcessor:
             for chunk in chunks
         )
 
-        if chunks:
-            embeddings = self.embedding_model.encode(
-                [chunk.text for chunk in chunks], normalize_embeddings=True
-            ).astype("float32")
-            index = faiss.IndexFlatIP(embeddings.shape[1])
-            index.add(embeddings)
-            faiss.write_index(index, str(self._index_path(document.id)))
-            self._metadata_path(document.id).write_text(
-                json.dumps([chunk.__dict__ for chunk in chunks]), encoding="utf-8"
-            )
+        import faiss
 
-        document.status = "Indexed" if chunks else "Needs review"
+        index = faiss.IndexFlatIP(embeddings.shape[1])
+        index.add(embeddings)
+        faiss.write_index(index, str(self._index_path(document.id)))
+        self._metadata_path(document.id).write_text(
+            json.dumps([chunk.__dict__ for chunk in chunks]), encoding="utf-8"
+        )
+
+        document.status = "Indexed"
         document.key_points = self.key_points_from_chunks(chunks)
         document.summary = self.summary_from_chunks(chunks)
         document.fields = self.fields_from_document(document, chunks)
         db.commit()
+
+    def _encode_chunks(self, chunks: list[TextChunk]) -> np.ndarray:
+        try:
+            embeddings = self.embedding_model.encode(
+                [chunk.text for chunk in chunks],
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+                device=self.settings.embedding_device,
+            )
+        except Exception as exc:
+            raise DocumentProcessingError(f"Embedding generation failed: {exc}") from exc
+        return np.asarray(embeddings, dtype="float32")
 
     def retrieve(self, document_id: str, question: str, limit: int = 4) -> list[TextChunk]:
         index_path = self._index_path(document_id)
@@ -92,9 +121,20 @@ class DocumentProcessor:
         if not index_path.exists() or not metadata_path.exists():
             return []
 
+        query = np.asarray(
+            self.embedding_model.encode(
+                [question],
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+                device=self.settings.embedding_device,
+            ),
+            dtype="float32",
+        )
+        import faiss
+
         index = faiss.read_index(str(index_path))
         chunks = [TextChunk(**item) for item in json.loads(metadata_path.read_text(encoding="utf-8"))]
-        query = self.embedding_model.encode([question], normalize_embeddings=True).astype("float32")
         scores, indices = index.search(query, min(limit, len(chunks)))
         return [chunks[i] for i in indices[0] if i >= 0]
 

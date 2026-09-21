@@ -56,7 +56,7 @@ Set `GEMINI_API_KEY` in `.env` for LangChain/Gemini answers, summaries, and extr
 
 ```text
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-3.6-flash
 ```
 
 The key is read only by the FastAPI backend and is never returned to the React frontend. Without a Gemini key, the backend still performs PDF extraction, chunking, embeddings, FAISS retrieval, and returns extractive fallback answers with source pages.
