@@ -61,6 +61,20 @@ GEMINI_MODEL=gemini-3.6-flash
 
 The key is read only by the FastAPI backend and is never returned to the React frontend. Without a Gemini key, the backend still performs PDF extraction, chunking, embeddings, FAISS retrieval, and returns extractive fallback answers with source pages.
 
+## Render Deployment
+
+Use lightweight local embeddings on Render so the service can run without loading PyTorch:
+
+```text
+EMBEDDING_MODEL=hashing
+```
+
+Render start command:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
 ## Tests
 
 ```bash

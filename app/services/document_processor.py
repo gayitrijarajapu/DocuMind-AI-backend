@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -31,8 +33,13 @@ class DocumentProcessor:
 
     @property
     def embedding_model(self):
+        if self._uses_hash_embeddings:
+            return None
         if self._embedding_model is None:
-            from sentence_transformers import SentenceTransformer
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError:
+                return None
 
             model_name = self.settings.embedding_model
             if model_name.startswith("sentence-transformers/"):
@@ -42,6 +49,10 @@ class DocumentProcessor:
                 device=self.settings.embedding_device,
             )
         return self._embedding_model
+
+    @property
+    def _uses_hash_embeddings(self) -> bool:
+        return self.settings.embedding_model.lower() in {"hashing", "hash", "local-hash"}
 
     def extract_pdf_text(self, file_path: Path) -> tuple[list[tuple[int, str]], int]:
         reader = PdfReader(str(file_path))
@@ -103,6 +114,9 @@ class DocumentProcessor:
         db.commit()
 
     def _encode_chunks(self, chunks: list[TextChunk]) -> np.ndarray:
+        if self._uses_hash_embeddings or self.embedding_model is None:
+            return self._hash_embeddings([chunk.text for chunk in chunks])
+
         try:
             embeddings = self.embedding_model.encode(
                 [chunk.text for chunk in chunks],
@@ -115,22 +129,39 @@ class DocumentProcessor:
             raise DocumentProcessingError(f"Embedding generation failed: {exc}") from exc
         return np.asarray(embeddings, dtype="float32")
 
+    def _hash_embeddings(self, texts: list[str], dimensions: int = 384) -> np.ndarray:
+        vectors = np.zeros((len(texts), dimensions), dtype="float32")
+        for row, text in enumerate(texts):
+            tokens = re.findall(r"[A-Za-z0-9]+", text.lower())
+            for token in tokens:
+                digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+                bucket = int.from_bytes(digest[:4], "little") % dimensions
+                sign = 1.0 if digest[4] % 2 == 0 else -1.0
+                vectors[row, bucket] += sign
+            norm = np.linalg.norm(vectors[row])
+            if norm > 0:
+                vectors[row] /= norm
+        return vectors
+
     def retrieve(self, document_id: str, question: str, limit: int = 4) -> list[TextChunk]:
         index_path = self._index_path(document_id)
         metadata_path = self._metadata_path(document_id)
         if not index_path.exists() or not metadata_path.exists():
             return []
 
-        query = np.asarray(
-            self.embedding_model.encode(
-                [question],
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-                device=self.settings.embedding_device,
-            ),
-            dtype="float32",
-        )
+        if self._uses_hash_embeddings or self.embedding_model is None:
+            query = self._hash_embeddings([question])
+        else:
+            query = np.asarray(
+                self.embedding_model.encode(
+                    [question],
+                    normalize_embeddings=True,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                    device=self.settings.embedding_device,
+                ),
+                dtype="float32",
+            )
         import faiss
 
         index = faiss.read_index(str(index_path))
@@ -169,6 +200,30 @@ class DocumentProcessor:
         for path in (self._index_path(document_id), self._metadata_path(document_id)):
             if path.exists():
                 path.unlink()
+
+
+def mark_stale_processing_documents(db: Session, minutes: int = 10) -> None:
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    stale_documents = (
+        db.query(Document)
+        .filter(Document.status == "Processing", Document.uploaded_at < cutoff)
+        .all()
+    )
+    if not stale_documents:
+        return
+
+    for document in stale_documents:
+        document.status = "Needs review"
+        document.summary = (
+            "Processing did not finish. The backend may have restarted while indexing this PDF. "
+            "Try uploading again, or use a text-based PDF."
+        )
+        document.key_points = ["Upload received", "Processing interrupted", "Upload again to retry"]
+        fields = dict(document.fields or {})
+        fields["Confidence"] = "Needs review"
+        fields["Error"] = "Processing was interrupted before indexing completed."
+        document.fields = fields
+    db.commit()
 
 
 processor = DocumentProcessor()

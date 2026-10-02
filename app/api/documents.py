@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.models.document import Document
 from app.schemas.document import DocumentOut, ExtractResponse, SummaryResponse
 from app.services.document_ai import extract_document_fields, summarize_document as summarize_with_ai
-from app.services.document_processor import processor
+from app.services.document_processor import mark_stale_processing_documents, processor
 from app.services.formatters import document_to_ui
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -75,12 +75,14 @@ def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db))
 
 @router.get("", response_model=list[DocumentOut])
 def list_documents(db: Session = Depends(get_db)):
+    mark_stale_processing_documents(db)
     documents = db.query(Document).order_by(Document.uploaded_at.desc()).all()
     return [document_to_ui(document) for document in documents]
 
 
 @router.get("/{document_id}", response_model=DocumentOut)
 def get_document(document_id: str, db: Session = Depends(get_db)):
+    mark_stale_processing_documents(db)
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found.")

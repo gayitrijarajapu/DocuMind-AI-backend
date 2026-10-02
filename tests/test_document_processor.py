@@ -18,6 +18,7 @@ def test_index_document_rejects_empty_chunks():
 
 def test_encode_chunks_uses_configured_device(monkeypatch):
     processor = DocumentProcessor()
+    processor.settings.embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
     processor.settings.embedding_device = "cpu"
     captured = {}
 
@@ -39,6 +40,7 @@ def test_encode_chunks_uses_configured_device(monkeypatch):
 
 def test_encode_chunks_wraps_embedding_errors():
     processor = DocumentProcessor()
+    processor.settings.embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
 
     class BrokenEmbeddingModel:
         def encode(self, *args, **kwargs):
@@ -48,3 +50,18 @@ def test_encode_chunks_wraps_embedding_errors():
 
     with pytest.raises(DocumentProcessingError, match="Embedding generation failed"):
         processor._encode_chunks([TextChunk(page=1, chunk_index=0, text="hello")])
+
+
+def test_hash_embeddings_do_not_require_transformer_model():
+    processor = DocumentProcessor()
+    processor.settings.embedding_model = "hashing"
+
+    embeddings = processor._encode_chunks(
+        [
+            TextChunk(page=1, chunk_index=0, text="invoice total amount"),
+            TextChunk(page=1, chunk_index=1, text="resume python fastapi"),
+        ]
+    )
+
+    assert embeddings.shape == (2, 384)
+    assert np.isclose(np.linalg.norm(embeddings[0]), 1.0)
